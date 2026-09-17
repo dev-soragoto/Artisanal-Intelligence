@@ -2,13 +2,6 @@
 node_modules/
 dist/
 coverage/
-/src-tauri/target/
-/src-tauri/gen/
-/src-tauri/resources/
-/src-tauri/icons/*
-!/src-tauri/icons/source.svg
-!/src-tauri/icons/icon.png
-!/src-tauri/icons/icon.ico
 *.tsbuildinfo
 *.log
 

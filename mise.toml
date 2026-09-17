@@ -1,16 +1,16 @@
 [tools]
 node = "24.21.0"
-rust = "1.98.1"
 
 [tasks.install]
 description = "Install locked npm dependencies"
 run = "npm ci"
 
 [tasks.dev]
-description = "Start the Tauri desktop app with hot reload"
+description = "Start the Fastify API and Vite operator console"
 run = "npm run dev"
 
 [tasks.build]
+description = "Build the Node server bundle and Vue web assets"
 run = "npm run build"
 
 [tasks.test]
@@ -25,13 +25,5 @@ description = "Format source, configuration and documentation"
 run = "npm run format"
 
 [tasks.start]
-description = "Launch the Tauri GUI using built frontend assets"
+description = "Launch the built same-origin Node web server"
 run = "npm start"
-
-[tasks."build-desktop"]
-description = "Build the native desktop executable"
-run = "npm run build:desktop"
-
-[tasks."check-desktop"]
-description = "Check the Rust desktop host"
-run = "npm run check:desktop"

@@ -17,21 +17,24 @@ Artisanal Intelligence lets you experience, firsthand, the horror of being contr
 - **100% handcrafted inference.** Every token is locally sourced from someone's brain.
 - **A truly sleeping model.** If the operator falls asleep, so does your SLA.
 
+## Wait... seriously
+
+Jokes aside, Artisanal Intelligence is not just a tool for pretending to be an LLM.
+
+It naturally lets you place breakpoints inside an LLM's “brain”, inspect or modify what is happening, and take over execution whenever you want.
+
+It may be useful for **Agent debugging, adversarial simulation**, and probably a few strange use cases we have not thought of yet.
+
 ## What works today
 
-The desktop application is built with Tauri 2 + Vue 3 + TypeScript + Vite + plain CSS.
+Artisanal Intelligence is now Web-first. The Tauri desktop host has been removed: Fastify is the server and the Vue Operator Console runs in a normal browser.
 
-The GUI automatically manages the Fastify backend and provides separate Thinking and Final input previews.
+The inference path already supports streaming and non-streaming `POST /v1/chat/completions`, Buffered / Live Final output, and Buffered / Live Thinking output. Final uses `content`; the current Chat Completions compatibility layer exposes Thinking through the ecosystem extension `reasoning`.
 
-The inference API, streaming output, and tool calling are not implemented yet.
-
-We plan to provide an OpenAI-compatible API so existing Agents can use a real human as their model backend.
-
-For now, the service infrastructure is in place. Steamed-bun economics are still under active research.
 
 ## Get started
 
-Install [mise](https://mise.jdx.dev/) and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) (on Windows: C++ Build Tools and WebView2), then run from the repository root. mise installs the pinned Node.js and Rust toolchains.
+Install [mise](https://mise.jdx.dev/), then run from the repository root. mise installs the pinned Node.js toolchain.
 
 ```sh
 mise trust
@@ -40,14 +43,29 @@ mise run install
 mise run dev
 ```
 
-`mise run dev` opens the desktop GUI with hot reload. `mise run start` builds the frontend and opens the GUI without a Vite server. The app starts its local API on port 3000 and stops it on exit; stop any old standalone server first, or set `PORT` to use another port.
+Development starts Fastify on `127.0.0.1:3000` and the Vite Operator Console on `127.0.0.1:5173`. Vite proxies `/api`, `/v1`, and `/operator` to Fastify.
 
-`mise run build-desktop` creates the native executable in `src-tauri/target/release/`; keep its adjacent `resources/` folder with it. `npm run bundle` creates a Windows installer with the Node.js runtime included. The first Rust build takes longer.
+For a production-style local run:
+
+```sh
+mise run build
+mise run start
+```
+
+Then open `http://127.0.0.1:3000`. The built Fastify process serves both the OpenAI-compatible API and `dist/web/` from the same origin.
+
+## Deployment shape
+
+The default deployment is one Node process with same-origin Web UI and API. `HOST` and `PORT` control the listen address; `ARTISANAL_WEB_ROOT` can override the static asset directory, and `ARTISANAL_SERVE_WEB=0` disables built-in static serving.
+
+The Web UI reads `/config.js` at runtime. Set `window.__ARTISANAL_CONFIG__.apiBase` there to point the same build at another API origin or reverse-proxy path when using a split deployment.
+
+**Do not expose the current Operator endpoints directly to the public Internet yet.** Operator authentication and the WebSocket control plane are the next infrastructure milestone.
 
 ## Keep it tidy
 
 ```sh
-npm run format        # Format TypeScript, Vue, Rust, configuration, and docs
+npm run format        # Format TypeScript, Vue, configuration, and docs
 npm run format:check  # Check formatting without changing files
 ```
 

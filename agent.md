@@ -42,6 +42,11 @@ mise activate pwsh | Out-String | Invoke-Expression
 
 初始化仅作用于当前 PowerShell 会话。启动新的独立 shell 进程后，需要重新初始化；自动化执行时，应在同一会话中完成初始化和后续开发命令。
 
-项目工具版本与公共任务集中配置在 `mise.toml` 中。当前使用 Tauri 桌面 GUI，默认启动入口为 `mise run dev` / `mise run start`，不再以浏览器作为操作台。Node.js 与 Rust 均由 mise 管理。
+项目工具版本与公共任务集中配置在 `mise.toml` 中。当前为 Web-first 架构，只使用 Node.js 工具链；Tauri / Rust 桌面宿主已移除。
 
-CI 暂停，不创建或启用自动工作流；按需在本地执行 `mise run check` 和 `mise run check-desktop`。旧工作流仅归档于 `agent/doc/archive/ci.yml.disabled`，恢复前需要用户明确要求。以上绝对路径仅适用于当前 Windows 开发机器。
+- `mise run dev`：同时启动 Fastify API 与 Vite Operator Console，开发态由 Vite 代理 `/api`、`/v1`、`/operator` 到 Fastify。
+- `mise run build`：生成 `dist/server.cjs` 与 `dist/web/`。
+- `mise run start`：运行构建后的同源 Node 服务，由 Fastify 同时提供 API 与 Vue 静态资源。
+- `mise run check`：本地格式 / 类型 / 测试 / 构建检查。
+
+CI 暂停，不创建或启用自动工作流；旧工作流仅归档于 `agent/doc/archive/ci.yml.disabled`，恢复前需要用户明确要求。以上绝对路径仅适用于当前 Windows 开发机器。

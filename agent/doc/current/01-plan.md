@@ -2,54 +2,154 @@
 
 ## 目标与现状
 
-真人扮演模型：客户端发送 conversation / tools，操作员输入 Thinking、Final 或工具调用，服务包装为兼容响应。服务本身不执行工具，也不代理上游模型。
+Artisanal Intelligence 是 Human-as-a-Model 服务，也是面向 Agent / LLM 的人工推理断点与接管层。客户端发送 conversation / tools，Human Operator 输入 Thinking、Final 或工具调用，服务将人工操作包装成兼容模型响应。
 
-已完成工程骨架、健康检查、双输入框预览和格式化；当前接入 Tauri 桌面 GUI，暂停 CI。推理接口、流式输出、工具调用尚未实现。桌面入口与验证进展见 [桌面接入](02-desktop.md)，历史结论见 [初始化归档](../archive/01-bootstrap.md)。
+当前 inference core 已经跑通：Buffered Final、Chat Completions SSE、Live Final、Thinking SSE 均已实现；迁移前版本已经通过 Windows `curl.exe -N` 手工验证。
 
-## 技术与运行
+**Web-first migration 已完成代码改造，等待人工复测。** Tauri / Rust 桌面宿主已经移除，Vue 直接通过 HTTP 连接 Fastify。Fastify 是产品核心，Browser Operator Console 是人类推理终端。
 
-- mise 固定 Node.js / Rust，npm 和 Cargo 分别管理依赖及锁文件；具体版本以项目配置为准。
-- Tauri 2 桌面窗口加载 Vue 3 + TypeScript + Vite + 普通 CSS，状态使用 composable；Fastify 后端，内存 Map 保存请求。
-- 操作台通过 WebSocket 提交事件，客户端通过 SSE 接收流式输出；非流式请求累计到结束后一次性返回。
-- Vue 递归组件生成工具表单，AJV 校验。MVP 不引入 Router、Pinia、Nuxt、大型 UI 库、monorepo、数据库或 Redis。
-- 开发：`mise run dev` 打开 Tauri 窗口，Vite 仅用于热更新。`mise run start` 使用构建后的前端直接打开 GUI。Tauri 管理独立 Fastify 子进程，默认本机端口 3000，`PORT` 可覆盖；退出应用清理后端。当前健康检查通过 Tauri IPC 转发，后续操作员事件连接在实现时补齐。
-- 本地检查：`mise run check` 安装锁定依赖、检查格式与类型、测试并构建前后端；`mise run check-desktop` 检查 Rust。格式化用 `npm run format`（含 Rust）。CI 已暂停，旧工作流归档且不自动执行。
+## 当前部署模型
 
-## MVP 协议与交互
+默认采用前后端代码分离、生产同源部署：
 
-- 优先实现 `GET /v1/models`、`POST /v1/chat/completions`；Responses API 后续再做。
-- 可接收但忽略 temperature、top_p、seed、max_tokens、frequency_penalty、presence_penalty、reasoning_effort；推理由操作员决定。
-- 展示完整 conversation 和工具结果。Thinking / Final 双输入框同时显示，输入位置决定通道，无通道切换按钮。
-- 一个全局 Live / Buffered 开关；Buffered 时两框独立发送，只提交各自未发送内容，发送不等于结束响应。
-- Live 在实际文本或 IME composition 提交后发送，不能按 keydown 发送组合输入。
-- Buffered → Live 不自动发草稿；有草稿的框先显式发送或清空，再进入 Live。Live → Buffered 后仅新输入进入草稿，已提交事件继续确认。
-- 独立 `Finish Response`；结束前处理未发送草稿并等待事件确认。
+```text
+http(s)://host/
+├── /                  Vue Operator Console
+├── /api/*             Service API
+├── /v1/*              OpenAI-compatible API
+└── /operator/*        Operator control plane
+```
 
-## 纠正与工具
+默认只需要一个 Node.js 进程。Fastify 同时提供 API 和构建后的 Vue 静态资源。
 
-- 输出 append-only。尚未提交 WebSocket 的草稿可自由修改；已提交但未确认的事件不能当作可撤回草稿。
-- 本地仍可编辑已发内容；删除部分通过 `correction` 追加为 Thinking 中的 `~~deleted text~~`，替换文字追加到原通道。连续删除尽量合并，不撤回远端字符。
-- Schema 基础映射：string → 文本框，number/integer → 数字框，boolean → 复选框，enum → 下拉框，array → 可增删列表，object → 嵌套表单。
-- 明确支持的 Schema 子集；不支持的结构显示原因并阻止提交，不静默忽略约束。前后端均校验参数。
-- MVP `Call` 提交一个工具调用并结束当前响应；提交前处理草稿、等待已有事件确认并校验工具名和参数。工具由客户端执行，结果随下一轮请求展示。
+开发态使用两个进程：
 
-## 事件与生命周期
+```text
+Vite :5173
+  ├── /api/*       -> Fastify :3000
+  ├── /v1/*        -> Fastify :3000
+  └── /operator/*  -> Fastify :3000
+```
 
-- UI 与协议 Adapter 解耦。内部事件：`reasoning_delta(text)`、`text_delta(text)`、`correction(deleted)`、`tool_call(name, arguments)`、`finish`。
-- 请求保存 id、messages、tools、createdAt、abortSignal；事件信封包含 requestId、eventId、递增 sequence。
-- MVP 同时只接受一个未完成请求，忙碌时明确拒绝。状态为 `pending → active → finished`，也可进入 `cancelled` / `failed`；终态不能重新写入或重复结束。
-- 客户端断开或请求超时：取消、清理连接及定时器，通知 UI。操作台断线：在可配置期限内保留请求供重连，超时终止。服务重启不恢复内存请求。
-- 服务端按序处理并按 eventId 去重；确认表示服务端已接受，不保证客户端已读取。UI 区分草稿、待确认和已确认内容。
-- 重连先同步状态、已确认序号和输出快照，再沿用原 ID 重试未确认事件。终态及去重信息有限期保留；过期请求明确拒绝。
-- reasoning 字段及不支持独立通道的客户端降级策略在实现 Adapter 时核对、记录，不预先宣称全面兼容。
+前端默认使用 same-origin 路径；`public/config.js` 提供运行时 `apiBase` 覆盖能力，为独立前端部署 / 反向代理部署留出边界。
 
-## 后续顺序与验收
+## mise 与构建
 
-1. **最小文本闭环**：模型列表 → 请求 → conversation → 双输入框 Buffered 发送 → 独立结束；验证流式与非流式输出。
-2. **实时与生命周期**：Live / IME、草稿切换、确认去重、取消超时和重连；验证不提前发送、不重复输出、终态不可写入。
-3. **工具调用**：Schema 表单、校验、调用结束、下一轮工具结果；验证无需手写 JSON、错误参数被拒绝。
-4. **纠正与接入**：已发内容删除纠正及合并、真实目标客户端接入；记录兼容限制。
+项目继续使用 mise 管理本地工具与公共入口，但只保留 Node.js 工具链：
 
-每阶段补充必要本地测试：普通路由用 Fastify 注入测试；SSE / WebSocket 与断线用真实连接测试；UI 覆盖双输入框、IME、草稿切换和纠正。测试模拟操作员，不依赖真人或上游密钥。暂不运行 CI。
+```text
+mise run install  -> npm ci
+mise run dev      -> Fastify watcher + Vite
+mise run build    -> dist/server.cjs + dist/web/
+mise run start    -> node dist/server.cjs
+mise run check    -> format + typecheck + test + build
+```
 
-后续候选：Responses API、多模态、更多客户端、多会话队列、请求历史与远程操作员。MVP 不做多用户调度、自动推理、tokenizer、sampling 或 KV cache。
+生产 server 使用 esbuild 打成单个 `dist/server.cjs`，Web 资源位于 `dist/web/`。后续 portable package 只需要携带 Node runtime、`server.cjs` 与 `web/`。
+
+## 当前执行切片
+
+1. **Buffered Final（已实现并验证）**
+   - `RequestSession` / `RequestManager`。
+   - `GET /v1/models`。
+   - 非流式 `POST /v1/chat/completions`。
+   - 单 active request。
+
+2. **Final Streaming / Live（已实现并验证）**
+   - Chat Completions SSE。
+   - `text_delta` + `finish`。
+   - Live Final 与 IME composition commit。
+
+3. **Thinking SSE（已实现并验证）**
+   - `reasoning_delta` 与 `text_delta` 平级。
+   - Thinking / Final 均支持 Buffered / Live。
+   - Chat Completions adapter 当前使用生态扩展 `delta.reasoning` / `message.reasoning`。
+
+4. **Web-first migration（代码已完成，待复测）**
+   - Tauri IPC 已替换为 Browser `fetch`。
+   - Operator HTTP 路径改为 `/operator/*`。
+   - Tauri / Rust / WebView2 / desktop child process 全部移除。
+   - `mise run dev` 使用纯 Node 开发启动器同时拉起 Fastify 与 Vite。
+   - `mise run build` 产出 `dist/server.cjs + dist/web/`。
+   - `mise run start` 以同源 Node Server 运行。
+   - 旧 Tauri 设计文档移入 archive。
+
+5. **Operator WebSocket / lifecycle / auth（下一阶段）**
+   - 实现 `/operator/ws` 正式 control plane，替换当前轮询 / HTTP delta transport。
+   - 增加 eventId、sequence、ack、去重、断线重连、取消与超时。
+   - UI 区分本地草稿、待确认和已确认输出。
+   - `/v1/*` 与 `/operator/*` 建立独立鉴权边界。
+   - 公网部署前增加 Operator 登录态、Origin 校验与基础安全约束。
+
+6. **Packaging / Docker**
+   - 增加 Dockerfile / compose 一键运行。
+   - 发布 GHCR 镜像。
+   - 增加 portable Node runtime 打包方案。
+   - 默认单进程同源部署，同时保留独立前端部署能力。
+
+7. **Correction**
+   - 输出保持 append-only。
+   - 删除已发 Final / Thinking 不回滚远端，而是追加 `correction(deleted, source)`。
+   - 删除已发 Final 时，在支持 reasoning 的协议中表现为 Thinking 的 `~~deleted text~~`。
+   - 连续 Backspace 尽量合并。
+
+8. **Tool Calling**
+   - 标准 function/tool call 协议闭环。
+   - JSON Schema 参数 UI 与双端校验。
+   - 工具由 Agent / Client 执行。
+
+9. **Responses API**
+   - 保持 core 与协议解耦。
+   - 增加 Responses Adapter，正式承载 Thinking / reasoning。
+
+10. **Bypass / Breakpoint**
+    - 接入 OpenAI-compatible upstream model。
+    - Human / upstream 共享 output sink。
+    - Passthrough、Breakpoint、Inspect、Modify、Takeover。
+    - 同一 response 始终只有一个明确 output owner。
+
+## 核心边界
+
+```text
+                         +-> Browser Human Operator
+                         |
+Agent -> Protocol Adapter -> Request Core -> Output Sink -> Agent
+                         |
+                         +-> Upstream LLM
+```
+
+内部事件保持协议无关：
+
+```text
+reasoning_delta(text, source)
+text_delta(text, source)
+correction(deleted, source)
+tool_call(name, arguments, source)
+finish(source)
+pause / resume / takeover
+```
+
+当前已实现 `reasoning_delta`、`text_delta` 与 `finish`。
+
+## 当前协议与安全约束
+
+- `GET /v1/models`。
+- `POST /v1/chat/completions` 支持 streaming / non-streaming。
+- Final 使用 `content`，Thinking 当前 Chat Completions compatibility adapter 使用 `reasoning` 扩展。
+- Operator 当前仍使用 HTTP polling + POST delta / finish，下一阶段替换为 WebSocket。
+- 服务本身不执行客户端工具。
+- 当前 Operator endpoint 尚未实现公网鉴权；即使 Server 已支持 `HOST=0.0.0.0`，在 auth 阶段完成前也不要直接裸露到公网。
+
+## 后续验收顺序
+
+1. ✅ 非流式 Chat Completion -> Human Final -> completion。
+2. ✅ Final SSE / Live -> `delta.content` -> `[DONE]`。
+3. ✅ Thinking SSE / Live -> `delta.reasoning` -> Final `delta.content` -> `[DONE]`。
+4. **待测 Web-first dev**：`mise run dev` -> 浏览器 `:5173` -> Agent / curl `:3000` -> Thinking / Final 正常返回。
+5. **待测同源 production build**：`mise run build && mise run start` -> 浏览器与 `/v1/*` 同源工作。
+6. Operator WebSocket + auth + ack / reconnect / cancel。
+7. Docker / portable package。
+8. Correction。
+9. Tool Calling。
+10. Responses API。
+11. Bypass / Breakpoint。
