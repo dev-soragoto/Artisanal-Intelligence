@@ -101,7 +101,13 @@ mise run check    -> format + typecheck + test + build
    - 保持 core 与协议解耦。
    - 增加 Responses Adapter，正式承载 Thinking / reasoning。
 
-10. **Bypass / Breakpoint**
+10. **GitHub Copilot CLI（已完成并验证）**
+    - 通过 Copilot CLI OpenAI-compatible BYOK 接入现有 Chat Completions Adapter，不需要以 Responses API 作为前置条件。
+    - `npm run copilot` 默认在 `agent/` 中运行 CLI，使用隔离的 `agent/run/copilot/` 状态目录与本地 offline provider。
+    - 已使用 GitHub Copilot CLI 1.0.80 人工验证普通聊天，以及 `view` 读取 `agent/`、`edit` 更新文件的完整 Tool Call 循环。
+    - 自动测试保持 hermetic，不依赖或调用外部 CLI。
+
+11. **Bypass / Breakpoint**
     - 接入 OpenAI-compatible upstream model。
     - Human / upstream 共享 output sink。
     - Passthrough、Breakpoint、Inspect、Modify、Takeover。
@@ -152,4 +158,5 @@ pause / resume / takeover
 8. ✅ Correction。
 9. ✅ Tool Calling。
 10. Responses API。
-11. Bypass / Breakpoint。
+11. ✅ GitHub Copilot CLI 普通聊天与目录读取 / 文件更新 Tool Call 闭环。
+12. Bypass / Breakpoint。

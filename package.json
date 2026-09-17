@@ -17,7 +17,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "check": "npm run format:check && npm run typecheck && npm test && npm run build",
-    "start": "node dist/server.cjs"
+    "start": "node dist/server.cjs",
+    "copilot": "node scripts/copilot-cli.mjs"
   },
   "dependencies": {
     "@fastify/cookie": "11.1.2",

@@ -25,7 +25,7 @@
 
 ## 现在能做什么
 
-当前 inference path 已支持流式 / 非流式 `POST /v1/chat/completions`、Buffered / Live Final、Buffered / Live Thinking、append-only Correction，以及标准 function tool call。Final 使用 `content`；当前 Chat Completions 兼容层通过生态扩展字段 `reasoning` 暴露 Thinking 与 Correction 标记。Tool Call 发出前会依据客户端提供的 JSON Schema 校验参数；工具始终由 API 客户端执行，本服务不会执行工具。
+当前 inference path 已支持流式 / 非流式 `POST /v1/chat/completions`、Buffered / Live Final、Buffered / Live Thinking、append-only Correction，以及标准 function tool call。Final 使用 `content`；当前 Chat Completions 兼容层通过生态扩展字段 `reasoning` 暴露 Thinking 与 Correction 标记。Tool Call 发出前会依据客户端提供的 JSON Schema 校验参数；工具始终由 API 客户端执行，本服务不会执行工具。GitHub Copilot CLI 已可通过其 OpenAI-compatible BYOK 模式接入。
 
 Operator control plane 使用 `/operator/ws`，支持带序号的事件、命令确认、重复抑制、重连快照与事件回放。请求可以取消，并具有可配置的超时。OpenAI-compatible API 与 Operator Console 使用互相独立的鉴权边界。
 
@@ -52,6 +52,19 @@ mise run start
 ```
 
 然后打开 `http://127.0.0.1:3000`。构建后的 Fastify 进程会在同一 Origin 下同时提供 OpenAI-compatible API 和 `dist/web/`。
+
+## GitHub Copilot CLI
+
+安装 [GitHub Copilot CLI](https://docs.github.com/zh/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli)，启动 Artisanal Intelligence，并打开 Operator Console。然后在另一个终端中通过项目包装器启动 Copilot：
+
+```sh
+npm run copilot
+```
+
+包装器使用 Copilot 的 OpenAI Chat Completions BYOK 协议，在 `agent/` 中启动 CLI，把隔离状态保存到 `agent/run/copilot/`，并默认启用 offline mode，使模型流量只访问本地服务。工具由 CLI 自己执行；Human Operator 选择的 Tool Call 由本服务返回，再由 CLI 在受信任的 `agent/` 工作目录中执行。
+
+`ARTISANAL_API_BASE_URL` 可修改服务地址（包装器会追加 `/v1`），`ARTISANAL_API_KEY` 会作为 provider bearer token 转发。高级覆盖项包括 `ARTISANAL_AGENT_DIR`、`ARTISANAL_COPILOT_HOME`、`ARTISANAL_COPILOT_BIN`、`ARTISANAL_COPILOT_MODEL_ID`、`ARTISANAL_COPILOT_WIRE_MODEL`，以及 `ARTISANAL_COPILOT_OFFLINE=0`。
+
 
 ## 鉴权与生命周期
 

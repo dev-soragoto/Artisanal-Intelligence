@@ -16,6 +16,10 @@ run = "npm run build"
 [tasks.test]
 run = "npm test"
 
+[tasks.copilot]
+description = "Launch GitHub Copilot CLI against the local Artisanal Intelligence service"
+run = "npm run copilot --"
+
 [tasks.check]
 description = "Install, check formatting, typecheck, test and build"
 run = ["npm ci", "npm run check"]

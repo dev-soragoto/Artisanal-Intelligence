@@ -27,7 +27,7 @@ It may be useful for **Agent debugging, adversarial simulation**, and probably a
 
 ## What works today
 
-The inference path supports streaming and non-streaming `POST /v1/chat/completions`, Buffered / Live Final output, Buffered / Live Thinking output, append-only corrections, and standard function tool calls. Final uses `content`; the current Chat Completions compatibility layer exposes Thinking and correction markers through the ecosystem extension `reasoning`. Tool arguments are checked against the client's JSON Schema before a call is emitted, and tools are always executed by the API client rather than this service.
+The inference path supports streaming and non-streaming `POST /v1/chat/completions`, Buffered / Live Final output, Buffered / Live Thinking output, append-only corrections, and standard function tool calls. Final uses `content`; the current Chat Completions compatibility layer exposes Thinking and correction markers through the ecosystem extension `reasoning`. Tool arguments are checked against the client's JSON Schema before a call is emitted, and tools are always executed by the API client rather than this service. GitHub Copilot CLI is supported through its OpenAI-compatible BYOK mode.
 
 The Operator control plane uses `/operator/ws` with sequenced events, command acknowledgements, duplicate suppression, reconnect snapshots and replay. Requests can be cancelled and have a configurable timeout. The OpenAI-compatible API and Operator Console use separate authentication boundaries.
 
@@ -54,6 +54,19 @@ mise run start
 ```
 
 Then open `http://127.0.0.1:3000`. The built Fastify process serves both the OpenAI-compatible API and `dist/web/` from the same origin.
+
+## GitHub Copilot CLI
+
+Install [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli), start Artisanal Intelligence, and open the Operator Console. In another terminal, launch Copilot through the project wrapper:
+
+```sh
+npm run copilot
+```
+
+The wrapper uses Copilot's OpenAI Chat Completions BYOK protocol, starts the CLI in `agent/`, keeps its isolated state in `agent/run/copilot/`, and enables offline mode so model traffic stays on the local service. The CLI executes its own tools; tool calls selected by the human operator are returned by this service and executed inside the CLI's trusted `agent/` working directory.
+
+`ARTISANAL_API_BASE_URL` changes the service URL (the wrapper appends `/v1`), and `ARTISANAL_API_KEY` is forwarded as the provider bearer token. Advanced overrides are `ARTISANAL_AGENT_DIR`, `ARTISANAL_COPILOT_HOME`, `ARTISANAL_COPILOT_BIN`, `ARTISANAL_COPILOT_MODEL_ID`, `ARTISANAL_COPILOT_WIRE_MODEL`, and `ARTISANAL_COPILOT_OFFLINE=0`.
+
 
 ## Authentication and lifecycle
 
