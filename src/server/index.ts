@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { buildApp } from './app.js';
+import { readServiceConfig } from './config.js';
 
 function readPort() {
   const port = Number(process.env.PORT ?? 3000);
@@ -13,6 +14,7 @@ function readPort() {
 async function main() {
   const port = readPort();
   const host = process.env.HOST ?? '127.0.0.1';
+  const config = readServiceConfig(process.env, host);
   const serveWeb = process.env.ARTISANAL_SERVE_WEB !== '0';
   const staticRoot = resolve(process.env.ARTISANAL_WEB_ROOT ?? 'dist/web');
 
@@ -21,6 +23,7 @@ async function main() {
   }
 
   const app = buildApp({
+    config,
     logger: true,
     staticRoot: serveWeb ? staticRoot : undefined,
   });

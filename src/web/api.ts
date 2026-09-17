@@ -10,9 +10,15 @@ declare global {
 
 const apiBase = (window.__ARTISANAL_CONFIG__?.apiBase ?? '').trim().replace(/\/+$/, '');
 
-function apiUrl(path: string) {
+export function apiUrl(path: string) {
   const normalized = path.startsWith('/') ? path : `/${path}`;
   return `${apiBase}${normalized}`;
+}
+
+export function operatorWebSocketUrl() {
+  const url = new URL(apiUrl('/operator/ws'), window.location.origin);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  return url.toString();
 }
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {

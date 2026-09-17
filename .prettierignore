@@ -2,5 +2,8 @@ node_modules/
 dist/
 coverage/
 package-lock.json
+.dockerignore
+.env*
+Dockerfile
 agent/*
 !agent/doc/

@@ -120,6 +120,21 @@ textarea {
   resize: vertical;
   font: inherit;
 }
+.login {
+  display: flex;
+  gap: 12px;
+  margin-top: 24px;
+}
+.login input {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 14px;
+  border: 1px solid #344239;
+  border-radius: 7px;
+  background: #151d18;
+  color: #dbe6de;
+  font: inherit;
+}
 textarea:disabled {
   color: #8d9a90;
   opacity: 0.72;

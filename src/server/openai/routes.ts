@@ -1,6 +1,13 @@
-import type { FastifyInstance, FastifyReply } from 'fastify';
+import { timingSafeEqual } from 'node:crypto';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type { ServiceConfig } from '../config.js';
 import { BusyError, RequestManager } from '../core/request-manager.js';
-import type { InferenceRequest, OutputEvent, RequestSession } from '../core/request-session.js';
+import {
+  RequestTerminalError,
+  type InferenceRequest,
+  type RequestEvent,
+  type RequestSession,
+} from '../core/request-session.js';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -15,6 +22,21 @@ function openAIError(reply: FastifyReply, status: number, message: string, code:
       code,
     },
   });
+}
+
+function equalSecret(actual: string, expected: string) {
+  const actualBytes = Buffer.from(actual);
+  const expectedBytes = Buffer.from(expected);
+  return actualBytes.length === expectedBytes.length && timingSafeEqual(actualBytes, expectedBytes);
+}
+
+function requireApiKey(request: FastifyRequest, reply: FastifyReply, expected?: string) {
+  if (!expected) return;
+  const authorization = request.headers.authorization;
+  const actual = authorization?.startsWith('Bearer ') ? authorization.slice(7) : '';
+  if (!equalSecret(actual, expected)) {
+    openAIError(reply, 401, 'Invalid or missing API key', 'invalid_api_key');
+  }
 }
 
 function parseRequest(body: unknown): InferenceRequest | undefined {
@@ -78,8 +100,9 @@ function streamResponse(
     requests.release(session.id);
   };
 
-  const onEvent = (event: OutputEvent) => {
+  const onEvent = (event: RequestEvent) => {
     if (closed || response.writableEnded || response.destroyed) return;
+    if (event.type === 'request_started') return;
     if (event.type === 'reasoning_delta') {
       // `reasoning` is an OpenAI-compatible ecosystem extension used by vLLM.
       // The core event remains protocol-neutral; Responses API gets its own adapter later.
@@ -90,7 +113,20 @@ function streamResponse(
       writeSse(response, streamChunk(session, model, { content: event.text }, null));
       return;
     }
-    writeSse(response, streamChunk(session, model, {}, 'stop'));
+    if (event.type === 'finish') {
+      writeSse(response, streamChunk(session, model, {}, 'stop'));
+      response.write('data: [DONE]\n\n');
+      response.end();
+      finish();
+      return;
+    }
+    writeSse(response, {
+      error: {
+        message: event.reason,
+        type: 'server_error',
+        code: event.type === 'timeout' ? 'request_timeout' : `request_${event.type}`,
+      },
+    });
     response.write('data: [DONE]\n\n');
     response.end();
     finish();
@@ -99,14 +135,22 @@ function streamResponse(
   const unsubscribe = session.subscribe(onEvent);
   response.once('close', () => {
     if (!closed && !response.writableEnded) {
-      session.cancel('Client disconnected during streaming response');
+      requests.cancel(session.id, 'Client disconnected during streaming response', 'client');
     }
     finish();
   });
 }
 
-export function registerOpenAIRoutes(app: FastifyInstance, requests: RequestManager) {
-  app.get('/v1/models', async () => ({
+export function registerOpenAIRoutes(
+  app: FastifyInstance,
+  requests: RequestManager,
+  config: ServiceConfig,
+) {
+  const guard = async (request: FastifyRequest, reply: FastifyReply) => {
+    requireApiKey(request, reply, config.apiKey);
+  };
+
+  app.get('/v1/models', { preHandler: guard }, async () => ({
     object: 'list',
     data: [
       {
@@ -118,7 +162,7 @@ export function registerOpenAIRoutes(app: FastifyInstance, requests: RequestMana
     ],
   }));
 
-  app.post('/v1/chat/completions', async (request, reply) => {
+  app.post('/v1/chat/completions', { preHandler: guard }, async (request, reply) => {
     const input = parseRequest(request.body);
     if (!input) return openAIError(reply, 400, '`messages` must be an array', 'invalid_request');
 
@@ -137,6 +181,9 @@ export function registerOpenAIRoutes(app: FastifyInstance, requests: RequestMana
       return reply;
     }
 
+    const onAborted = () =>
+      requests.cancel(session.id, 'Client disconnected before completion', 'client');
+    request.raw.once('aborted', onAborted);
     try {
       const output = await session.waitForFinal();
       return {
@@ -161,7 +208,14 @@ export function registerOpenAIRoutes(app: FastifyInstance, requests: RequestMana
           total_tokens: 0,
         },
       };
+    } catch (error) {
+      if (error instanceof RequestTerminalError) {
+        const status = error.state === 'timed_out' ? 504 : error.state === 'cancelled' ? 499 : 500;
+        return openAIError(reply, status, error.message, `request_${error.state}`);
+      }
+      throw error;
     } finally {
+      request.raw.off('aborted', onAborted);
       requests.release(session.id);
     }
   });

@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 
-export type RequestState = 'pending' | 'active' | 'finished' | 'cancelled' | 'failed';
+export type RequestState = 'pending' | 'active' | 'finished' | 'cancelled' | 'timed_out' | 'failed';
 export type OutputSource = 'human' | 'upstream';
+export type LifecycleSource = OutputSource | 'client' | 'operator' | 'system';
 
 export interface InferenceRequest {
   model: string;
@@ -10,16 +11,30 @@ export interface InferenceRequest {
   stream: boolean;
 }
 
-export type OutputEvent =
+interface EventMetadata {
+  eventId: string;
+  requestId: string;
+  sequence: number;
+  createdAt: number;
+}
+
+type RequestEventPayload =
+  | { type: 'request_started'; source: 'client' }
   | { type: 'reasoning_delta'; text: string; source: OutputSource }
   | { type: 'text_delta'; text: string; source: OutputSource }
-  | { type: 'finish'; source: OutputSource };
+  | { type: 'finish'; source: OutputSource }
+  | { type: 'cancel'; reason: string; source: 'client' | 'operator' | 'system' }
+  | { type: 'timeout'; reason: string; source: 'system' }
+  | { type: 'failure'; reason: string; source: LifecycleSource };
+
+export type RequestEvent = EventMetadata & RequestEventPayload;
 
 export interface RequestSnapshot extends InferenceRequest {
   id: string;
   createdAt: number;
   state: RequestState;
   source: OutputSource;
+  sequence: number;
   reasoning: string;
   output: string;
 }
@@ -29,6 +44,16 @@ export interface CompletedOutput {
   content: string;
 }
 
+export class RequestTerminalError extends Error {
+  constructor(
+    readonly state: Extract<RequestState, 'cancelled' | 'timed_out' | 'failed'>,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'RequestTerminalError';
+  }
+}
+
 export class RequestSession {
   readonly id = `req_${randomUUID()}`;
   readonly createdAt = Date.now();
@@ -36,7 +61,9 @@ export class RequestSession {
   private state: RequestState = 'pending';
   private reasoning = '';
   private output = '';
-  private readonly listeners = new Set<(event: OutputEvent) => void>();
+  private sequence = 0;
+  private readonly events: RequestEvent[] = [];
+  private readonly listeners = new Set<(event: RequestEvent) => void>();
   private readonly finalPromise: Promise<CompletedOutput>;
   private resolveFinal!: (output: CompletedOutput) => void;
   private rejectFinal!: (error: Error) => void;
@@ -46,52 +73,74 @@ export class RequestSession {
       this.resolveFinal = resolve;
       this.rejectFinal = reject;
     });
+    // Streaming adapters consume events rather than this promise. Keep cancellation from
+    // becoming an unhandled rejection while preserving rejection for awaiting callers.
+    void this.finalPromise.catch(() => undefined);
   }
 
   activate() {
     if (this.state !== 'pending') throw new Error(`Cannot activate request in state ${this.state}`);
     this.state = 'active';
+    return this.emit({ type: 'request_started', source: 'client' });
   }
 
   appendReasoning(text: string, source: OutputSource = 'human') {
-    if (this.state !== 'active') throw new Error(`Cannot append output in state ${this.state}`);
-    if (!text) return;
+    this.requireActive('append output');
+    if (!text) return undefined;
     this.reasoning += text;
-    this.emit({ type: 'reasoning_delta', text, source });
+    return this.emit({ type: 'reasoning_delta', text, source });
   }
 
   appendText(text: string, source: OutputSource = 'human') {
-    if (this.state !== 'active') throw new Error(`Cannot append output in state ${this.state}`);
-    if (!text) return;
+    this.requireActive('append output');
+    if (!text) return undefined;
     this.output += text;
-    this.emit({ type: 'text_delta', text, source });
+    return this.emit({ type: 'text_delta', text, source });
   }
 
   finish(source: OutputSource = 'human') {
-    if (this.state !== 'active') throw new Error(`Cannot finish request in state ${this.state}`);
+    this.requireActive('finish request');
     this.state = 'finished';
-    this.emit({ type: 'finish', source });
+    const event = this.emit({ type: 'finish', source });
     this.resolveFinal({ reasoning: this.reasoning, content: this.output });
+    return event;
   }
 
-  submitFinal(text: string) {
-    this.appendText(text);
-    this.finish();
-  }
-
-  cancel(reason = 'Request cancelled') {
-    if (this.state === 'finished' || this.state === 'cancelled' || this.state === 'failed') return;
+  cancel(reason = 'Request cancelled', source: 'client' | 'operator' | 'system' = 'system') {
+    if (this.isTerminal()) return undefined;
     this.state = 'cancelled';
-    this.rejectFinal(new Error(reason));
+    const event = this.emit({ type: 'cancel', reason, source });
+    this.rejectFinal(new RequestTerminalError('cancelled', reason));
+    return event;
+  }
+
+  timeout(reason = 'Request timed out') {
+    if (this.isTerminal()) return undefined;
+    this.state = 'timed_out';
+    const event = this.emit({ type: 'timeout', reason, source: 'system' });
+    this.rejectFinal(new RequestTerminalError('timed_out', reason));
+    return event;
+  }
+
+  fail(reason = 'Request failed', source: LifecycleSource = 'system') {
+    if (this.isTerminal()) return undefined;
+    this.state = 'failed';
+    const event = this.emit({ type: 'failure', reason, source });
+    this.rejectFinal(new RequestTerminalError('failed', reason));
+    return event;
   }
 
   waitForFinal() {
     return this.finalPromise;
   }
 
-  subscribe(listener: (event: OutputEvent) => void) {
+  subscribe(listener: (event: RequestEvent) => void) {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  eventsAfter(sequence: number) {
+    return this.events.filter((event) => event.sequence > sequence);
   }
 
   snapshot(): RequestSnapshot {
@@ -100,13 +149,36 @@ export class RequestSession {
       createdAt: this.createdAt,
       state: this.state,
       source: this.source,
+      sequence: this.sequence,
       reasoning: this.reasoning,
       output: this.output,
       ...this.request,
     };
   }
 
-  private emit(event: OutputEvent) {
-    for (const listener of this.listeners) listener(event);
+  private requireActive(action: string) {
+    if (this.state !== 'active') throw new Error(`Cannot ${action} in state ${this.state}`);
+  }
+
+  private isTerminal() {
+    return (
+      this.state === 'finished' ||
+      this.state === 'cancelled' ||
+      this.state === 'timed_out' ||
+      this.state === 'failed'
+    );
+  }
+
+  private emit(event: RequestEventPayload): RequestEvent {
+    const committed = {
+      ...event,
+      eventId: `evt_${randomUUID()}`,
+      requestId: this.id,
+      sequence: ++this.sequence,
+      createdAt: Date.now(),
+    } as RequestEvent;
+    this.events.push(committed);
+    for (const listener of this.listeners) listener(committed);
+    return committed;
   }
 }
