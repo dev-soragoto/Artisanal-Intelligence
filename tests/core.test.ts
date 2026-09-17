@@ -4,6 +4,7 @@ import { CommandConflictError, RequestManager } from '../src/server/core/request
 import {
   RequestSession,
   RequestTerminalError,
+  ToolCallValidationError,
   type RequestEvent,
 } from '../src/server/core/request-session.js';
 
@@ -34,7 +35,12 @@ test('RequestSession records ordered immutable lifecycle events and completed ou
     ],
   );
   assert.equal(new Set(observed.map((event) => event.eventId)).size, 4);
-  assert.deepEqual(await session.waitForFinal(), { reasoning: 'think', content: 'answer' });
+  assert.deepEqual(await session.waitForFinal(), {
+    reasoning: 'think',
+    content: 'answer',
+    corrections: [],
+    toolCalls: [],
+  });
   assert.deepEqual(session.eventsAfter(2), observed.slice(2));
   assert.equal(session.snapshot().state, 'finished');
   assert.throws(() => session.appendText('late'), /state finished/);
@@ -60,7 +66,58 @@ test('RequestManager acknowledges duplicate commands without applying them twice
   assert.equal(session.snapshot().output, 'once');
   assert.throws(() => manager.execute({ ...command, text: 'different' }), CommandConflictError);
   manager.execute({ type: 'finish', commandId: 'cmd-2', requestId: session.id });
-  assert.deepEqual(await session.waitForFinal(), { reasoning: '', content: 'once' });
+  assert.deepEqual(await session.waitForFinal(), {
+    reasoning: '',
+    content: 'once',
+    corrections: [],
+    toolCalls: [],
+  });
+});
+
+test('RequestSession keeps corrections append-only and validates tool calls against JSON Schema', async () => {
+  const session = new RequestSession({
+    ...input,
+    tools: [
+      {
+        type: 'function',
+        function: {
+          name: 'get_weather',
+          parameters: {
+            type: 'object',
+            properties: { city: { type: 'string' }, days: { type: 'integer', minimum: 1 } },
+            required: ['city'],
+            additionalProperties: false,
+          },
+        },
+      },
+    ],
+  });
+  session.activate();
+  session.appendText('draft');
+  const correction = session.correct('final', 'aft');
+  assert.equal(correction?.type, 'correction');
+  assert.equal(session.snapshot().output, 'draft');
+  assert.deepEqual(session.snapshot().corrections, [
+    { channel: 'final', deleted: 'aft', source: 'human' },
+  ]);
+
+  assert.throws(
+    () => session.appendToolCall('get_weather', { city: 'Shanghai', days: 0 }),
+    ToolCallValidationError,
+  );
+  assert.throws(() => session.appendToolCall('missing', {}), /Unknown tool/);
+  const event = session.appendToolCall('get_weather', '{"city":"Shanghai","days":2}');
+  assert.equal(event.type, 'tool_call');
+  assert.equal(event.index, 0);
+  assert.deepEqual(event.toolCall.function, {
+    name: 'get_weather',
+    arguments: '{"city":"Shanghai","days":2}',
+  });
+  session.finish();
+  const completed = await session.waitForFinal();
+  assert.equal(completed.content, 'draft');
+  assert.equal(completed.corrections[0].deleted, 'aft');
+  assert.equal(completed.toolCalls[0].function.name, 'get_weather');
 });
 
 test('RequestManager times out an unanswered request and permits a later request after release', async () => {

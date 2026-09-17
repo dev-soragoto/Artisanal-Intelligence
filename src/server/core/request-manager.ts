@@ -23,6 +23,20 @@ export type OperatorCommand =
       channel: 'thinking' | 'final';
       text: string;
     }
+  | {
+      type: 'correction';
+      commandId: string;
+      requestId: string;
+      channel: 'thinking' | 'final';
+      deleted: string;
+    }
+  | {
+      type: 'tool_call';
+      commandId: string;
+      requestId: string;
+      name: string;
+      arguments: unknown;
+    }
   | { type: 'finish'; commandId: string; requestId: string }
   | { type: 'cancel'; commandId: string; requestId: string; reason?: string };
 
@@ -116,6 +130,10 @@ export class RequestManager {
         command.channel === 'thinking'
           ? session.appendReasoning(command.text)
           : session.appendText(command.text);
+    } else if (command.type === 'correction') {
+      event = session.correct(command.channel, command.deleted);
+    } else if (command.type === 'tool_call') {
+      event = session.appendToolCall(command.name, command.arguments);
     } else if (command.type === 'finish') {
       event = session.finish();
     } else {

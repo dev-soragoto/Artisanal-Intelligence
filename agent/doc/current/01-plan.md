@@ -86,13 +86,13 @@ mise run check    -> format + typecheck + test + build
    - 镜像以无特权 `node` 用户运行，并带 HTTP healthcheck。
    - 默认单进程同源部署，同时保留独立前端部署能力。
 
-7. **Correction**
+7. **Correction（已完成并验证）**
    - 输出保持 append-only。
    - 删除已发 Final / Thinking 不回滚远端，而是追加 `correction(deleted, source)`。
    - 删除已发 Final 时，在支持 reasoning 的协议中表现为 Thinking 的 `~~deleted text~~`。
    - 连续 Backspace 尽量合并。
 
-8. **Tool Calling**
+8. **Tool Calling（已完成并验证）**
    - 标准 function/tool call 协议闭环。
    - JSON Schema 参数 UI 与双端校验。
    - 工具由 Agent / Client 执行。
@@ -149,7 +149,7 @@ pause / resume / takeover
 5. ✅ 同源 production build：server / web build 与静态服务有自动测试及 Docker smoke test。
 6. ✅ Operator WebSocket + auth + ack / reconnect / cancel / timeout。
 7. ✅ 本地 Dockerfile build、health、静态页面与 API 鉴权。
-8. Correction。
-9. Tool Calling。
+8. ✅ Correction。
+9. ✅ Tool Calling。
 10. Responses API。
 11. Bypass / Breakpoint。

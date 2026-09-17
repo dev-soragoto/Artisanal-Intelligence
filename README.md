@@ -27,7 +27,7 @@ It may be useful for **Agent debugging, adversarial simulation**, and probably a
 
 ## What works today
 
-The inference path supports streaming and non-streaming `POST /v1/chat/completions`, Buffered / Live Final output, and Buffered / Live Thinking output. Final uses `content`; the current Chat Completions compatibility layer exposes Thinking through the ecosystem extension `reasoning`.
+The inference path supports streaming and non-streaming `POST /v1/chat/completions`, Buffered / Live Final output, Buffered / Live Thinking output, append-only corrections, and standard function tool calls. Final uses `content`; the current Chat Completions compatibility layer exposes Thinking and correction markers through the ecosystem extension `reasoning`. Tool arguments are checked against the client's JSON Schema before a call is emitted, and tools are always executed by the API client rather than this service.
 
 The Operator control plane uses `/operator/ws` with sequenced events, command acknowledgements, duplicate suppression, reconnect snapshots and replay. Requests can be cancelled and have a configurable timeout. The OpenAI-compatible API and Operator Console use separate authentication boundaries.
 

@@ -25,8 +25,7 @@
 
 ## 现在能做什么
 
-
-当前 inference path 已支持流式 / 非流式 `POST /v1/chat/completions`、Buffered / Live Final，以及 Buffered / Live Thinking。Final 使用 `content`；当前 Chat Completions 兼容层通过生态扩展字段 `reasoning` 暴露 Thinking。
+当前 inference path 已支持流式 / 非流式 `POST /v1/chat/completions`、Buffered / Live Final、Buffered / Live Thinking、append-only Correction，以及标准 function tool call。Final 使用 `content`；当前 Chat Completions 兼容层通过生态扩展字段 `reasoning` 暴露 Thinking 与 Correction 标记。Tool Call 发出前会依据客户端提供的 JSON Schema 校验参数；工具始终由 API 客户端执行，本服务不会执行工具。
 
 Operator control plane 使用 `/operator/ws`，支持带序号的事件、命令确认、重复抑制、重连快照与事件回放。请求可以取消，并具有可配置的超时。OpenAI-compatible API 与 Operator Console 使用互相独立的鉴权边界。
 

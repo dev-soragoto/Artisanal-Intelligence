@@ -4,6 +4,8 @@ import type { ServiceConfig } from '../config.js';
 import { BusyError, RequestManager } from '../core/request-manager.js';
 import {
   RequestTerminalError,
+  ToolCallValidationError,
+  type FunctionToolDefinition,
   type InferenceRequest,
   type RequestEvent,
   type RequestSession,
@@ -41,15 +43,56 @@ function requireApiKey(request: FastifyRequest, reply: FastifyReply, expected?: 
 
 function parseRequest(body: unknown): InferenceRequest | undefined {
   if (!isRecord(body) || !Array.isArray(body.messages)) return undefined;
+  const tools = parseTools(body.tools);
+  if (!tools) return undefined;
   return {
     model:
       typeof body.model === 'string' && body.model.length > 0
         ? body.model
         : 'artisanal-intelligence',
     messages: body.messages,
-    tools: Array.isArray(body.tools) ? body.tools : [],
+    tools,
     stream: body.stream === true,
   };
+}
+
+function parseTools(value: unknown): FunctionToolDefinition[] | undefined {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) return undefined;
+  const names = new Set<string>();
+  const tools: FunctionToolDefinition[] = [];
+  for (const candidate of value) {
+    if (!isRecord(candidate) || candidate.type !== 'function' || !isRecord(candidate.function)) {
+      return undefined;
+    }
+    const definition = candidate.function;
+    if (
+      typeof definition.name !== 'string' ||
+      definition.name.length === 0 ||
+      definition.name.length > 256 ||
+      names.has(definition.name) ||
+      (definition.description !== undefined && typeof definition.description !== 'string') ||
+      (definition.parameters !== undefined && !isRecord(definition.parameters))
+    ) {
+      return undefined;
+    }
+    names.add(definition.name);
+    tools.push({
+      type: 'function',
+      function: {
+        name: definition.name,
+        ...(typeof definition.description === 'string'
+          ? { description: definition.description }
+          : {}),
+        ...(isRecord(definition.parameters) ? { parameters: definition.parameters } : {}),
+      },
+    });
+  }
+  return tools;
+}
+
+function correctionReasoning(deleted: string) {
+  return `~~${deleted}~~`;
 }
 
 function completionId(session: RequestSession) {
@@ -113,8 +156,37 @@ function streamResponse(
       writeSse(response, streamChunk(session, model, { content: event.text }, null));
       return;
     }
+    if (event.type === 'correction') {
+      writeSse(
+        response,
+        streamChunk(session, model, { reasoning: correctionReasoning(event.deleted) }, null),
+      );
+      return;
+    }
+    if (event.type === 'tool_call') {
+      writeSse(
+        response,
+        streamChunk(
+          session,
+          model,
+          {
+            tool_calls: [
+              {
+                index: event.index,
+                id: event.toolCall.id,
+                type: event.toolCall.type,
+                function: event.toolCall.function,
+              },
+            ],
+          },
+          null,
+        ),
+      );
+      return;
+    }
     if (event.type === 'finish') {
-      writeSse(response, streamChunk(session, model, {}, 'stop'));
+      const finishReason = session.snapshot().toolCalls.length ? 'tool_calls' : 'stop';
+      writeSse(response, streamChunk(session, model, {}, finishReason));
       response.write('data: [DONE]\n\n');
       response.end();
       finish();
@@ -164,7 +236,14 @@ export function registerOpenAIRoutes(
 
   app.post('/v1/chat/completions', { preHandler: guard }, async (request, reply) => {
     const input = parseRequest(request.body);
-    if (!input) return openAIError(reply, 400, '`messages` must be an array', 'invalid_request');
+    if (!input) {
+      return openAIError(
+        reply,
+        400,
+        '`messages` must be an array and `tools` must contain unique function definitions',
+        'invalid_request',
+      );
+    }
 
     let session;
     try {
@@ -172,6 +251,9 @@ export function registerOpenAIRoutes(
     } catch (error) {
       if (error instanceof BusyError) {
         return openAIError(reply, 409, error.message, 'operator_busy');
+      }
+      if (error instanceof ToolCallValidationError) {
+        return openAIError(reply, 400, error.message, 'invalid_tool_schema');
       }
       throw error;
     }
@@ -186,6 +268,11 @@ export function registerOpenAIRoutes(
     request.raw.once('aborted', onAborted);
     try {
       const output = await session.waitForFinal();
+      const correctionText = output.corrections
+        .map((correction) => correctionReasoning(correction.deleted))
+        .join('');
+      const reasoning = `${output.reasoning}${correctionText}`;
+      const finishReason = output.toolCalls.length ? 'tool_calls' : 'stop';
       return {
         id: completionId(session),
         object: 'chat.completion',
@@ -196,10 +283,11 @@ export function registerOpenAIRoutes(
             index: 0,
             message: {
               role: 'assistant',
-              content: output.content,
-              ...(output.reasoning ? { reasoning: output.reasoning } : {}),
+              content: output.toolCalls.length && !output.content ? null : output.content,
+              ...(reasoning ? { reasoning } : {}),
+              ...(output.toolCalls.length ? { tool_calls: output.toolCalls } : {}),
             },
-            finish_reason: 'stop',
+            finish_reason: finishReason,
           },
         ],
         usage: {

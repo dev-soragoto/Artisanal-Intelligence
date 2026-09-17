@@ -6,6 +6,7 @@ import {
   type OperatorCommand,
   type RequestManager,
 } from '../core/request-manager.js';
+import { ToolCallValidationError } from '../core/request-session.js';
 import { isAllowedOperatorOrigin, OperatorAuth, requireOperator } from './auth.js';
 
 interface ResumeCommand {
@@ -54,6 +55,31 @@ function parseFrame(value: unknown): OperatorCommand | ResumeCommand | undefined
       text: value.text,
     };
   }
+  if (value.type === 'correction') {
+    if (
+      (value.channel !== 'thinking' && value.channel !== 'final') ||
+      !boundedString(value.deleted, 1_000_000)
+    ) {
+      return undefined;
+    }
+    return {
+      type: 'correction',
+      commandId: value.commandId,
+      requestId: value.requestId,
+      channel: value.channel,
+      deleted: value.deleted,
+    };
+  }
+  if (value.type === 'tool_call') {
+    if (!boundedString(value.name) || value.arguments === undefined) return undefined;
+    return {
+      type: 'tool_call',
+      commandId: value.commandId,
+      requestId: value.requestId,
+      name: value.name,
+      arguments: value.arguments,
+    };
+  }
   if (value.type === 'finish') {
     return { type: 'finish', commandId: value.commandId, requestId: value.requestId };
   }
@@ -75,10 +101,11 @@ function send(socket: WebSocket, value: unknown) {
 
 function commandError(socket: WebSocket, error: unknown, commandId?: string) {
   const conflict = error instanceof CommandConflictError;
+  const toolCall = error instanceof ToolCallValidationError;
   send(socket, {
     type: 'error',
     ...(commandId ? { commandId } : {}),
-    code: conflict ? 'command_conflict' : 'invalid_command',
+    code: conflict ? 'command_conflict' : toolCall ? 'invalid_tool_call' : 'invalid_command',
     error: error instanceof Error ? error.message : String(error),
   });
 }
@@ -132,7 +159,7 @@ export function registerOperatorRoutes(
     (socket) => {
       send(socket, {
         type: 'hello',
-        protocolVersion: 1,
+        protocolVersion: 2,
         request: requests.current()?.snapshot() ?? null,
       });
       const unsubscribe = requests.subscribe((event) => send(socket, { type: 'event', ...event }));

@@ -1,13 +1,38 @@
 import { randomUUID } from 'node:crypto';
+import { Ajv, type ErrorObject, type ValidateFunction } from 'ajv';
 
 export type RequestState = 'pending' | 'active' | 'finished' | 'cancelled' | 'timed_out' | 'failed';
 export type OutputSource = 'human' | 'upstream';
 export type LifecycleSource = OutputSource | 'client' | 'operator' | 'system';
 
+export interface FunctionToolDefinition {
+  type: 'function';
+  function: {
+    name: string;
+    description?: string;
+    parameters?: Record<string, unknown>;
+  };
+}
+
+export interface ToolCall {
+  id: string;
+  type: 'function';
+  function: {
+    name: string;
+    arguments: string;
+  };
+}
+
+export interface Correction {
+  channel: 'thinking' | 'final';
+  deleted: string;
+  source: OutputSource;
+}
+
 export interface InferenceRequest {
   model: string;
   messages: unknown[];
-  tools: unknown[];
+  tools: FunctionToolDefinition[];
   stream: boolean;
 }
 
@@ -22,6 +47,13 @@ type RequestEventPayload =
   | { type: 'request_started'; source: 'client' }
   | { type: 'reasoning_delta'; text: string; source: OutputSource }
   | { type: 'text_delta'; text: string; source: OutputSource }
+  | {
+      type: 'correction';
+      channel: 'thinking' | 'final';
+      deleted: string;
+      source: OutputSource;
+    }
+  | { type: 'tool_call'; toolCall: ToolCall; index: number; source: OutputSource }
   | { type: 'finish'; source: OutputSource }
   | { type: 'cancel'; reason: string; source: 'client' | 'operator' | 'system' }
   | { type: 'timeout'; reason: string; source: 'system' }
@@ -37,11 +69,22 @@ export interface RequestSnapshot extends InferenceRequest {
   sequence: number;
   reasoning: string;
   output: string;
+  corrections: Correction[];
+  toolCalls: ToolCall[];
 }
 
 export interface CompletedOutput {
   reasoning: string;
   content: string;
+  corrections: Correction[];
+  toolCalls: ToolCall[];
+}
+
+export class ToolCallValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ToolCallValidationError';
+  }
 }
 
 export class RequestTerminalError extends Error {
@@ -61,6 +104,9 @@ export class RequestSession {
   private state: RequestState = 'pending';
   private reasoning = '';
   private output = '';
+  private readonly corrections: Correction[] = [];
+  private readonly toolCalls: ToolCall[] = [];
+  private readonly toolValidators = new Map<string, ValidateFunction>();
   private sequence = 0;
   private readonly events: RequestEvent[] = [];
   private readonly listeners = new Set<(event: RequestEvent) => void>();
@@ -69,6 +115,17 @@ export class RequestSession {
   private rejectFinal!: (error: Error) => void;
 
   constructor(readonly request: InferenceRequest) {
+    const ajv = new Ajv({ allErrors: true, strict: false });
+    for (const tool of request.tools) {
+      const schema = tool.function.parameters ?? { type: 'object' };
+      try {
+        this.toolValidators.set(tool.function.name, ajv.compile(schema));
+      } catch (error) {
+        throw new ToolCallValidationError(
+          `Invalid JSON Schema for tool ${tool.function.name}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
     this.finalPromise = new Promise<CompletedOutput>((resolve, reject) => {
       this.resolveFinal = resolve;
       this.rejectFinal = reject;
@@ -98,11 +155,48 @@ export class RequestSession {
     return this.emit({ type: 'text_delta', text, source });
   }
 
+  correct(channel: 'thinking' | 'final', deleted: string, source: OutputSource = 'human') {
+    this.requireActive('correct output');
+    if (!deleted) return undefined;
+    const correction = { channel, deleted, source } satisfies Correction;
+    this.corrections.push(correction);
+    return this.emit({ type: 'correction', ...correction });
+  }
+
+  appendToolCall(name: string, argumentsValue: unknown, source: OutputSource = 'human') {
+    this.requireActive('append tool call');
+    const validator = this.toolValidators.get(name);
+    if (!validator) throw new ToolCallValidationError(`Unknown tool: ${name}`);
+    let parsed = argumentsValue;
+    if (typeof parsed === 'string') {
+      try {
+        parsed = JSON.parse(parsed);
+      } catch {
+        throw new ToolCallValidationError('Tool arguments must be valid JSON');
+      }
+    }
+    if (!validator(parsed)) {
+      throw new ToolCallValidationError(formatSchemaErrors(name, validator.errors));
+    }
+    const toolCall: ToolCall = {
+      id: `call_${randomUUID()}`,
+      type: 'function',
+      function: { name, arguments: JSON.stringify(parsed) },
+    };
+    const index = this.toolCalls.push(toolCall) - 1;
+    return this.emit({ type: 'tool_call', toolCall, index, source });
+  }
+
   finish(source: OutputSource = 'human') {
     this.requireActive('finish request');
     this.state = 'finished';
     const event = this.emit({ type: 'finish', source });
-    this.resolveFinal({ reasoning: this.reasoning, content: this.output });
+    this.resolveFinal({
+      reasoning: this.reasoning,
+      content: this.output,
+      corrections: [...this.corrections],
+      toolCalls: [...this.toolCalls],
+    });
     return event;
   }
 
@@ -152,6 +246,8 @@ export class RequestSession {
       sequence: this.sequence,
       reasoning: this.reasoning,
       output: this.output,
+      corrections: [...this.corrections],
+      toolCalls: [...this.toolCalls],
       ...this.request,
     };
   }
@@ -181,4 +277,11 @@ export class RequestSession {
     for (const listener of this.listeners) listener(committed);
     return committed;
   }
+}
+
+function formatSchemaErrors(name: string, errors: ErrorObject[] | null | undefined) {
+  const detail = (errors ?? [])
+    .map((error) => `${error.instancePath || '/'} ${error.message ?? 'is invalid'}`)
+    .join('; ');
+  return `Arguments for tool ${name} do not match its JSON Schema${detail ? `: ${detail}` : ''}`;
 }

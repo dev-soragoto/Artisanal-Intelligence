@@ -289,6 +289,177 @@ test('streams reasoning, final text, stop, and DONE through Chat Completions SSE
   }
 });
 
+test('streams append-only corrections as reasoning without retracting emitted content', async () => {
+  const app = buildApp({ config: { requestTimeoutMs: 2_000 } });
+  const operator = await openOperator(app);
+  try {
+    await waitForMessage(operator, (message) => message.type === 'hello');
+    const completion = app.inject(completionRequest(true));
+    const request = await activeRequestFromEvent(operator);
+    const requestId = request.id as string;
+
+    send(operator.socket, {
+      type: 'delta',
+      commandId: 'correction-text',
+      requestId,
+      channel: 'final',
+      text: 'draft',
+    });
+    await waitForMessage(
+      operator,
+      (message) => message.type === 'ack' && message.commandId === 'correction-text',
+    );
+    send(operator.socket, {
+      type: 'correction',
+      commandId: 'correction-delete',
+      requestId,
+      channel: 'final',
+      deleted: 'aft',
+    });
+    const correctionAck = await waitForMessage(
+      operator,
+      (message) => message.type === 'ack' && message.commandId === 'correction-delete',
+    );
+    assert.ok(isRecord(correctionAck.request));
+    assert.equal(correctionAck.request.output, 'draft');
+    send(operator.socket, { type: 'finish', commandId: 'correction-finish', requestId });
+
+    const response = await completion;
+    assert.match(response.body, /"content":"draft"/);
+    assert.match(response.body, /"reasoning":"~~aft~~"/);
+    assert.match(response.body, /"finish_reason":"stop"/);
+  } finally {
+    operator.socket.terminate();
+    await app.close();
+  }
+});
+
+test('validates operator tool arguments and returns standard non-streaming tool calls', async () => {
+  const app = buildApp({ config: { requestTimeoutMs: 2_000 } });
+  const operator = await openOperator(app);
+  try {
+    await waitForMessage(operator, (message) => message.type === 'hello');
+    const completion = app.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      payload: {
+        model: 'artisanal-intelligence',
+        messages: [{ role: 'user', content: 'Weather?' }],
+        tools: [
+          {
+            type: 'function',
+            function: {
+              name: 'get_weather',
+              description: 'Get a forecast',
+              parameters: {
+                type: 'object',
+                properties: {
+                  city: { type: 'string' },
+                  days: { type: 'integer', minimum: 1 },
+                },
+                required: ['city', 'days'],
+                additionalProperties: false,
+              },
+            },
+          },
+        ],
+      },
+    });
+    const request = await activeRequestFromEvent(operator);
+    const requestId = request.id as string;
+
+    send(operator.socket, {
+      type: 'tool_call',
+      commandId: 'bad-tool',
+      requestId,
+      name: 'get_weather',
+      arguments: { city: 'Shanghai', days: 0 },
+    });
+    const invalid = await waitForMessage(
+      operator,
+      (message) => message.type === 'error' && message.commandId === 'bad-tool',
+    );
+    assert.equal(invalid.code, 'invalid_tool_call');
+
+    send(operator.socket, {
+      type: 'tool_call',
+      commandId: 'valid-tool',
+      requestId,
+      name: 'get_weather',
+      arguments: { city: 'Shanghai', days: 2 },
+    });
+    const ack = await waitForMessage(
+      operator,
+      (message) => message.type === 'ack' && message.commandId === 'valid-tool',
+    );
+    assert.equal(ack.sequence, 2);
+    send(operator.socket, { type: 'finish', commandId: 'tool-finish', requestId });
+
+    const response = await completion;
+    assert.equal(response.statusCode, 200);
+    const choice = response.json().choices[0];
+    assert.equal(choice.finish_reason, 'tool_calls');
+    assert.equal(choice.message.content, null);
+    assert.equal(choice.message.tool_calls[0].type, 'function');
+    assert.equal(choice.message.tool_calls[0].function.name, 'get_weather');
+    assert.equal(choice.message.tool_calls[0].function.arguments, '{"city":"Shanghai","days":2}');
+  } finally {
+    operator.socket.terminate();
+    await app.close();
+  }
+});
+
+test('streams standard tool call deltas and a tool_calls finish reason', async () => {
+  const app = buildApp({ config: { requestTimeoutMs: 2_000 } });
+  const operator = await openOperator(app);
+  try {
+    await waitForMessage(operator, (message) => message.type === 'hello');
+    const completion = app.inject({
+      ...completionRequest(true),
+      payload: {
+        ...completionRequest(true).payload,
+        tools: [
+          {
+            type: 'function',
+            function: {
+              name: 'echo',
+              parameters: {
+                type: 'object',
+                properties: { text: { type: 'string' } },
+                required: ['text'],
+              },
+            },
+          },
+        ],
+      },
+    });
+    const request = await activeRequestFromEvent(operator);
+    const requestId = request.id as string;
+    send(operator.socket, {
+      type: 'tool_call',
+      commandId: 'stream-tool',
+      requestId,
+      name: 'echo',
+      arguments: { text: 'hello' },
+    });
+    await waitForMessage(
+      operator,
+      (message) => message.type === 'ack' && message.commandId === 'stream-tool',
+    );
+    send(operator.socket, { type: 'finish', commandId: 'stream-tool-finish', requestId });
+
+    const response = await completion;
+    assert.match(response.body, /"tool_calls":\[/);
+    assert.match(response.body, /"name":"echo"/);
+    assert.match(response.body, /"arguments":"\{\\"text\\":\\"hello\\"\}"/);
+    assert.match(response.body, /"finish_reason":"tool_calls"/);
+    assert.match(response.body, /data: \[DONE\]/);
+  } finally {
+    operator.socket.terminate();
+    await app.close();
+  }
+});
+
 test('ends an SSE response with a structured timeout error and DONE', async () => {
   const app = buildApp({ config: { requestTimeoutMs: 30 } });
   const operator = await openOperator(app);

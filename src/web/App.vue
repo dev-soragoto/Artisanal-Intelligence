@@ -1,14 +1,36 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, type Ref } from 'vue';
+import { Ajv, type ErrorObject } from 'ajv';
+import { computed, onMounted, onUnmounted, ref, type Ref } from 'vue';
 import { apiDisplayBase, apiGet, apiPost, operatorWebSocketUrl } from './api';
 
 type OutputChannel = 'thinking' | 'final';
+
+interface JsonSchema {
+  type?: string | string[];
+  title?: string;
+  description?: string;
+  default?: unknown;
+  enum?: unknown[];
+  properties?: Record<string, JsonSchema>;
+  required?: string[];
+  items?: JsonSchema;
+  [key: string]: unknown;
+}
+
+interface FunctionTool {
+  type: 'function';
+  function: {
+    name: string;
+    description?: string;
+    parameters?: JsonSchema;
+  };
+}
 
 interface PendingRequest {
   id: string;
   model: string;
   messages: unknown[];
-  tools: unknown[];
+  tools: FunctionTool[];
   stream: boolean;
   createdAt: number;
   state: string;
@@ -16,6 +38,12 @@ interface PendingRequest {
   sequence: number;
   reasoning: string;
   output: string;
+  corrections: Array<{ channel: OutputChannel; deleted: string }>;
+  toolCalls: Array<{
+    id: string;
+    type: 'function';
+    function: { name: string; arguments: string };
+  }>;
 }
 
 interface PendingCommand {
@@ -37,12 +65,27 @@ const live = ref(false);
 const composing = ref<Record<OutputChannel, boolean>>({ thinking: false, final: false });
 const submitting = ref(false);
 const operatorError = ref('');
+const selectedToolName = ref('');
+const toolArguments = ref<Record<string, unknown>>({});
 const channelText: Record<OutputChannel, Ref<string>> = {
   thinking: thinkingText,
   final: finalText,
 };
 const liveShadow: Record<OutputChannel, string> = { thinking: '', final: '' };
+const pendingCorrections: Record<
+  OutputChannel,
+  { requestId: string; deleted: string; timer?: ReturnType<typeof setTimeout> } | undefined
+> = { thinking: undefined, final: undefined };
 const pendingCommands = new Map<string, PendingCommand>();
+const ajv = new Ajv({ allErrors: true, strict: false });
+const selectedTool = computed(
+  () =>
+    activeRequest.value?.tools.find((tool) => tool.function.name === selectedToolName.value) ??
+    null,
+);
+const toolProperties = computed(() =>
+  Object.entries(selectedTool.value?.function.parameters?.properties ?? {}),
+);
 let liveQueue: Promise<void> = Promise.resolve();
 let socket: WebSocket | undefined;
 let healthTimer: ReturnType<typeof setInterval> | undefined;
@@ -83,12 +126,24 @@ function resetEditors() {
   composing.value.thinking = false;
   composing.value.final = false;
   live.value = false;
+  for (const channel of ['thinking', 'final'] as const) {
+    const pending = pendingCorrections[channel];
+    if (pending?.timer) clearTimeout(pending.timer);
+    pendingCorrections[channel] = undefined;
+  }
 }
 
 function applyRequest(value: unknown) {
   const next = isPendingRequest(value) ? value : null;
-  if (next?.id !== activeRequest.value?.id) resetEditors();
+  if (next?.id !== activeRequest.value?.id) {
+    resetEditors();
+    selectedToolName.value = '';
+    toolArguments.value = {};
+  }
   activeRequest.value = next && next.state === 'active' ? next : null;
+  if (activeRequest.value?.tools.length && !selectedToolName.value) {
+    selectTool(activeRequest.value.tools[0].function.name);
+  }
 }
 
 function transmit(frame: Record<string, unknown>) {
@@ -203,8 +258,39 @@ function sendCommand(frame: Record<string, unknown>) {
 
 function queueDelta(requestId: string, channel: OutputChannel, text: string) {
   if (!text) return;
+  flushPendingCorrection(channel);
   liveQueue = liveQueue
     .then(() => sendCommand({ type: 'delta', requestId, channel, text }))
+    .catch((error) => {
+      operatorError.value = String(error);
+    });
+}
+
+function queueCorrection(requestId: string, channel: OutputChannel, deleted: string) {
+  if (!deleted) return;
+  const pending = pendingCorrections[channel];
+  if (pending?.timer) clearTimeout(pending.timer);
+  pendingCorrections[channel] = {
+    requestId,
+    deleted: `${deleted}${pending?.requestId === requestId ? pending.deleted : ''}`,
+    timer: setTimeout(() => flushPendingCorrection(channel), 80),
+  };
+}
+
+function flushPendingCorrection(channel: OutputChannel) {
+  const pending = pendingCorrections[channel];
+  if (!pending) return;
+  if (pending.timer) clearTimeout(pending.timer);
+  pendingCorrections[channel] = undefined;
+  liveQueue = liveQueue
+    .then(() =>
+      sendCommand({
+        type: 'correction',
+        requestId: pending.requestId,
+        channel,
+        deleted: pending.deleted,
+      }),
+    )
     .catch((error) => {
       operatorError.value = String(error);
     });
@@ -242,6 +328,8 @@ async function finishResponse() {
       await flushBuffered('thinking');
       await flushBuffered('final');
     }
+    flushPendingCorrection('thinking');
+    flushPendingCorrection('final');
     await liveQueue;
     await sendCommand({ type: 'finish', requestId: current.id });
     if (activeRequest.value?.id === current.id) activeRequest.value = null;
@@ -266,6 +354,8 @@ function toggleLive() {
     live.value = true;
     return;
   }
+  flushPendingCorrection('thinking');
+  flushPendingCorrection('final');
   resetEditors();
 }
 
@@ -275,15 +365,19 @@ function flushLiveInput(channel: OutputChannel) {
   const textRef = channelText[channel];
   const value = textRef.value;
   const shadow = liveShadow[channel];
-  if (!value.startsWith(shadow)) {
-    textRef.value = shadow;
-    operatorError.value = `当前 Live ${channel} 是 append-only；删除纠正会在下一阶段接入。`;
-    return;
+  let prefixLength = 0;
+  while (
+    prefixLength < value.length &&
+    prefixLength < shadow.length &&
+    value[prefixLength] === shadow[prefixLength]
+  ) {
+    prefixLength += 1;
   }
-  const delta = value.slice(shadow.length);
-  if (!delta) return;
+  const deleted = shadow.slice(prefixLength);
+  const delta = value.slice(prefixLength);
   liveShadow[channel] = value;
-  queueDelta(current.id, channel, delta);
+  if (deleted) queueCorrection(current.id, channel, deleted);
+  if (delta) queueDelta(current.id, channel, delta);
 }
 
 function onCompositionEnd(channel: OutputChannel) {
@@ -301,6 +395,105 @@ function messageBody(message: unknown) {
   return JSON.stringify(message, null, 2) ?? String(message);
 }
 
+function schemaType(schema: JsonSchema) {
+  return Array.isArray(schema.type)
+    ? (schema.type.find((type) => type !== 'null') ?? 'string')
+    : (schema.type ?? 'string');
+}
+
+function initialSchemaValue(schema: JsonSchema): unknown {
+  if (schema.default !== undefined) return schema.default;
+  const type = schemaType(schema);
+  if (type === 'boolean') return false;
+  if (type === 'array') return [];
+  if (type === 'object') return {};
+  return undefined;
+}
+
+function selectTool(name: string) {
+  selectedToolName.value = name;
+  const tool = activeRequest.value?.tools.find((candidate) => candidate.function.name === name);
+  const values: Record<string, unknown> = {};
+  for (const [property, schema] of Object.entries(tool?.function.parameters?.properties ?? {})) {
+    const initial = initialSchemaValue(schema);
+    if (initial !== undefined) values[property] = initial;
+  }
+  toolArguments.value = values;
+}
+
+function displaySchemaValue(name: string, schema: JsonSchema) {
+  const value = toolArguments.value[name];
+  if (schemaType(schema) === 'object' || schemaType(schema) === 'array') {
+    return typeof value === 'string'
+      ? value
+      : JSON.stringify(value ?? initialSchemaValue(schema), null, 2);
+  }
+  return value === undefined ? '' : String(value);
+}
+
+function updateToolArgument(name: string, schema: JsonSchema, event: Event) {
+  const target = event.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
+  const type = schemaType(schema);
+  let value: unknown = target.value;
+  if (type === 'boolean' && target instanceof HTMLInputElement) value = target.checked;
+  else if ((type === 'number' || type === 'integer') && target.value !== '')
+    value = Number(target.value);
+  else if (type === 'number' || type === 'integer') value = undefined;
+  else if (type === 'object' || type === 'array') {
+    try {
+      value = JSON.parse(target.value);
+    } catch {
+      value = target.value;
+    }
+  } else if (schema.enum) {
+    const matched = schema.enum.find((candidate) => String(candidate) === target.value);
+    value = matched ?? target.value;
+  }
+  toolArguments.value = { ...toolArguments.value, [name]: value };
+}
+
+function schemaErrorText(errors: ErrorObject[] | null | undefined) {
+  return (errors ?? [])
+    .map((error) => `${error.instancePath || '/'} ${error.message ?? '参数无效'}`)
+    .join('；');
+}
+
+async function submitToolCall() {
+  const current = activeRequest.value;
+  const tool = selectedTool.value;
+  if (!current || !tool || submitting.value) return;
+  operatorError.value = '';
+  const schema = tool.function.parameters ?? { type: 'object' };
+  let validate;
+  try {
+    validate = ajv.compile(schema);
+  } catch (error) {
+    operatorError.value = `工具 Schema 无效：${String(error)}`;
+    return;
+  }
+  if (!validate(toolArguments.value)) {
+    operatorError.value = `工具参数校验失败：${schemaErrorText(validate.errors)}`;
+    return;
+  }
+  submitting.value = true;
+  try {
+    flushPendingCorrection('thinking');
+    flushPendingCorrection('final');
+    await liveQueue;
+    await sendCommand({
+      type: 'tool_call',
+      requestId: current.id,
+      name: tool.function.name,
+      arguments: toolArguments.value,
+    });
+    selectTool(tool.function.name);
+  } catch (error) {
+    operatorError.value = String(error);
+  } finally {
+    submitting.value = false;
+  }
+}
+
 onMounted(() => {
   void checkHealth();
   void loadSession();
@@ -314,6 +507,10 @@ onUnmounted(() => {
   for (const pending of pendingCommands.values())
     pending.reject(new Error('Operator console closed'));
   pendingCommands.clear();
+  for (const channel of ['thinking', 'final'] as const) {
+    const pending = pendingCorrections[channel];
+    if (pending?.timer) clearTimeout(pending.timer);
+  }
 });
 </script>
 
@@ -364,9 +561,22 @@ onUnmounted(() => {
             <strong>ASSISTANT · FINAL · CONFIRMED</strong>
             <pre>{{ activeRequest.output }}</pre>
           </article>
-          <p v-if="activeRequest.tools.length" class="muted">
-            此请求提供 {{ activeRequest.tools.length }} 个工具；图形化 Tool Call 将在后续阶段接入。
-          </p>
+          <article
+            v-for="(correction, index) in activeRequest.corrections"
+            :key="`correction-${index}`"
+            class="message output-preview correction"
+          >
+            <strong>ASSISTANT · {{ correction.channel.toUpperCase() }} · CORRECTION</strong>
+            <pre>~~{{ correction.deleted }}~~</pre>
+          </article>
+          <article
+            v-for="toolCall in activeRequest.toolCalls"
+            :key="toolCall.id"
+            class="message output-preview"
+          >
+            <strong>ASSISTANT · TOOL CALL · {{ toolCall.function.name }}</strong>
+            <pre>{{ toolCall.function.arguments }}</pre>
+          </article>
         </template>
         <template v-else>
           <p class="eyebrow">HUMAN OPERATOR CONSOLE</p>
@@ -440,6 +650,79 @@ onUnmounted(() => {
             @compositionend="onCompositionEnd('final')"
           ></textarea>
         </div>
+      </section>
+
+      <section v-if="activeRequest?.tools.length" class="conversation tool-panel">
+        <div class="request-meta">
+          <div>
+            <p class="eyebrow">TOOL CALL</p>
+            <h2>调用客户端工具</h2>
+          </div>
+          <select
+            :value="selectedToolName"
+            :disabled="submitting"
+            aria-label="选择工具"
+            @change="selectTool(($event.target as HTMLSelectElement).value)"
+          >
+            <option
+              v-for="tool in activeRequest.tools"
+              :key="tool.function.name"
+              :value="tool.function.name"
+            >
+              {{ tool.function.name }}
+            </option>
+          </select>
+        </div>
+        <p v-if="selectedTool?.function.description" class="muted">
+          {{ selectedTool.function.description }}
+        </p>
+        <div v-for="[name, schema] in toolProperties" :key="name" class="tool-field">
+          <label :for="`tool-${name}`">
+            {{ schema.title || name }}
+            <span v-if="selectedTool?.function.parameters?.required?.includes(name)">*</span>
+          </label>
+          <select
+            v-if="schema.enum"
+            :id="`tool-${name}`"
+            :value="displaySchemaValue(name, schema)"
+            @change="updateToolArgument(name, schema, $event)"
+          >
+            <option value="">请选择</option>
+            <option v-for="choice in schema.enum" :key="String(choice)" :value="String(choice)">
+              {{ choice }}
+            </option>
+          </select>
+          <input
+            v-else-if="schemaType(schema) === 'boolean'"
+            :id="`tool-${name}`"
+            type="checkbox"
+            :checked="Boolean(toolArguments[name])"
+            @change="updateToolArgument(name, schema, $event)"
+          />
+          <textarea
+            v-else-if="schemaType(schema) === 'object' || schemaType(schema) === 'array'"
+            :id="`tool-${name}`"
+            :value="displaySchemaValue(name, schema)"
+            @input="updateToolArgument(name, schema, $event)"
+          ></textarea>
+          <input
+            v-else
+            :id="`tool-${name}`"
+            :type="
+              schemaType(schema) === 'number' || schemaType(schema) === 'integer'
+                ? 'number'
+                : 'text'
+            "
+            :step="schemaType(schema) === 'integer' ? '1' : 'any'"
+            :value="displaySchemaValue(name, schema)"
+            @input="updateToolArgument(name, schema, $event)"
+          />
+          <small v-if="schema.description" class="muted">{{ schema.description }}</small>
+        </div>
+        <p v-if="toolProperties.length === 0" class="muted">此工具没有参数。</p>
+        <button :disabled="submitting || !selectedTool" @click="submitToolCall">
+          发送 Tool Call
+        </button>
       </section>
 
       <footer>
