@@ -1,0 +1,30 @@
+# Dependencies and generated output
+node_modules/
+dist/
+coverage/
+/src-tauri/target/
+/src-tauri/gen/
+/src-tauri/resources/
+/src-tauri/icons/*
+!/src-tauri/icons/source.svg
+!/src-tauri/icons/icon.png
+!/src-tauri/icons/icon.ico
+*.tsbuildinfo
+*.log
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+mise.local.toml
+.mise.local.toml
+
+# Editor / OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Agent scratch space; keep all documentation tracked
+/agent/*
+!/agent/doc/

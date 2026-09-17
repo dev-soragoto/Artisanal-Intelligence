@@ -1,0 +1,6 @@
+{
+  "build": {
+    "devUrl": null,
+    "beforeDevCommand": { "script": "npm run desktop:build", "wait": true }
+  }
+}
