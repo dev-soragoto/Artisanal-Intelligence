@@ -48,9 +48,12 @@ mise run install
 mise run dev
 ```
 
-Development starts Fastify on `127.0.0.1:3000` and the Vite Operator Console on `127.0.0.1:5173`. Vite proxies `/api`, `/v1`, and `/operator` to Fastify.
+In development, Fastify listens on `0.0.0.0:3000` by default.
+The Vite Operator Console listens on `0.0.0.0:5173` by default.
+Users can use `http://<LAN-IP>:3000/v1` with the default API key `sk-artisanal-intelligence`.
+The default Operator Console password is `artisanal-operator`.
 
-Loopback development does not require credentials. When credentials are configured, clients send `Authorization: Bearer <ARTISANAL_API_KEY>` to `/v1/*`, while human operators sign in through the browser with `ARTISANAL_OPERATOR_PASSWORD`.
+Clients send `Authorization: Bearer <ARTISANAL_API_KEY>` to `/v1/*`, just like the OpenAI API, while human operators sign in through the browser with `ARTISANAL_OPERATOR_PASSWORD`. Set either environment variable before running `npm run dev` to override its development default.
 
 For a production-style local run:
 
@@ -71,8 +74,7 @@ npm run copilot
 
 The wrapper uses Copilot's OpenAI Chat Completions BYOK protocol, starts the CLI in `agent/`, keeps its isolated state in `agent/run/copilot/`, and enables offline mode so model traffic stays on the local service. The CLI executes its own tools; tool calls selected by the human operator are returned by this service and executed inside the CLI's trusted `agent/` working directory.
 
-`ARTISANAL_API_BASE_URL` changes the service URL (the wrapper appends `/v1`), and `ARTISANAL_API_KEY` is forwarded as the provider bearer token. Advanced overrides are `ARTISANAL_AGENT_DIR`, `ARTISANAL_COPILOT_HOME`, `ARTISANAL_COPILOT_BIN`, `ARTISANAL_COPILOT_MODEL_ID`, `ARTISANAL_COPILOT_WIRE_MODEL`, and `ARTISANAL_COPILOT_OFFLINE=0`.
-
+`ARTISANAL_API_BASE_URL` changes the service URL (the wrapper appends `/v1`), and `ARTISANAL_API_KEY` is forwarded as the provider bearer token. When it is unset, the wrapper uses the development default `sk-artisanal-intelligence`. Advanced overrides are `ARTISANAL_AGENT_DIR`, `ARTISANAL_COPILOT_HOME`, `ARTISANAL_COPILOT_BIN`, `ARTISANAL_COPILOT_MODEL_ID`, `ARTISANAL_COPILOT_WIRE_MODEL`, and `ARTISANAL_COPILOT_OFFLINE=0`.
 
 ## Authentication and lifecycle
 

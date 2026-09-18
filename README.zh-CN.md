@@ -48,9 +48,12 @@ mise run install
 mise run dev
 ```
 
-开发模式下 Fastify 监听 `127.0.0.1:3000`，Vite Operator Console 监听 `127.0.0.1:5173`。Vite 会把 `/api`、`/v1` 和 `/operator` 代理到 Fastify。
+开发模式下 Fastify 默认监听 `0.0.0.0:3000`
+Vite Operator Console 默认监听 `0.0.0.0:5173`
+用户可以使用 `http://<内网 IP>:3000/v1`，默认 API Key 是 `sk-artisanal-intelligence`
+Operator Console 的默认密码是 `artisanal-operator`
 
-Loopback 开发环境不强制配置凭据。配置凭据后，客户端访问 `/v1/*` 时发送 `Authorization: Bearer <ARTISANAL_API_KEY>`，人类 Operator 则在浏览器中使用 `ARTISANAL_OPERATOR_PASSWORD` 登录。
+客户端访问 `/v1/*` 时与 OpenAI API 一样发送 `Authorization: Bearer <ARTISANAL_API_KEY>`，人类 Operator 则在浏览器中使用 `ARTISANAL_OPERATOR_PASSWORD` 登录。在执行 `npm run dev` 前设置对应环境变量，即可覆盖开发环境默认值。
 
 本地按生产方式运行：
 
@@ -71,8 +74,7 @@ npm run copilot
 
 包装器使用 Copilot 的 OpenAI Chat Completions BYOK 协议，在 `agent/` 中启动 CLI，把隔离状态保存到 `agent/run/copilot/`，并默认启用 offline mode，使模型流量只访问本地服务。工具由 CLI 自己执行；Human Operator 选择的 Tool Call 由本服务返回，再由 CLI 在受信任的 `agent/` 工作目录中执行。
 
-`ARTISANAL_API_BASE_URL` 可修改服务地址（包装器会追加 `/v1`），`ARTISANAL_API_KEY` 会作为 provider bearer token 转发。高级覆盖项包括 `ARTISANAL_AGENT_DIR`、`ARTISANAL_COPILOT_HOME`、`ARTISANAL_COPILOT_BIN`、`ARTISANAL_COPILOT_MODEL_ID`、`ARTISANAL_COPILOT_WIRE_MODEL`，以及 `ARTISANAL_COPILOT_OFFLINE=0`。
-
+`ARTISANAL_API_BASE_URL` 可修改服务地址（包装器会追加 `/v1`），`ARTISANAL_API_KEY` 会作为 provider bearer token 转发；未设置时，包装器使用开发环境默认值 `sk-artisanal-intelligence`。高级覆盖项包括 `ARTISANAL_AGENT_DIR`、`ARTISANAL_COPILOT_HOME`、`ARTISANAL_COPILOT_BIN`、`ARTISANAL_COPILOT_MODEL_ID`、`ARTISANAL_COPILOT_WIRE_MODEL`，以及 `ARTISANAL_COPILOT_OFFLINE=0`。
 
 ## 鉴权与生命周期
 

@@ -11,6 +11,7 @@ const copilotHome = resolve(
 const providerBaseUrl = normalizeProviderBaseUrl(
   process.env.ARTISANAL_API_BASE_URL?.trim() || 'http://127.0.0.1:3000',
 );
+const apiKey = process.env.ARTISANAL_API_KEY?.trim() || 'sk-artisanal-intelligence';
 
 await mkdir(agentDirectory, { recursive: true });
 await mkdir(copilotHome, { recursive: true });
@@ -20,6 +21,7 @@ const environment = {
   COPILOT_HOME: copilotHome,
   COPILOT_OFFLINE: process.env.ARTISANAL_COPILOT_OFFLINE === '0' ? 'false' : 'true',
   COPILOT_PROVIDER_BASE_URL: providerBaseUrl,
+  COPILOT_PROVIDER_BEARER_TOKEN: apiKey,
   COPILOT_PROVIDER_TYPE: 'openai',
   COPILOT_PROVIDER_WIRE_API: 'completions',
   COPILOT_PROVIDER_MODEL_ID: process.env.ARTISANAL_COPILOT_MODEL_ID?.trim() || 'gpt-4.1',
@@ -29,10 +31,6 @@ const environment = {
 
 delete environment.COPILOT_MODEL;
 delete environment.COPILOT_PROVIDER_API_KEY;
-delete environment.COPILOT_PROVIDER_BEARER_TOKEN;
-if (process.env.ARTISANAL_API_KEY) {
-  environment.COPILOT_PROVIDER_BEARER_TOKEN = process.env.ARTISANAL_API_KEY;
-}
 
 const executable = process.env.ARTISANAL_COPILOT_BIN?.trim() || 'copilot';
 const child = spawn(executable, process.argv.slice(2), {
