@@ -4,12 +4,23 @@ import { fileURLToPath } from 'node:url';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const port = process.env.PORT ?? '3000';
+const operatorOrigins = [
+  process.env.ARTISANAL_OPERATOR_ORIGINS,
+  'http://127.0.0.1:5173',
+  'http://localhost:5173',
+]
+  .filter(Boolean)
+  .join(',');
 const jobs = [
   {
     name: 'server',
     script: join(root, 'node_modules', 'tsx', 'dist', 'cli.mjs'),
     args: ['watch', 'src/server/index.ts'],
-    env: { ...process.env, ARTISANAL_SERVE_WEB: '0' },
+    env: {
+      ...process.env,
+      ARTISANAL_SERVE_WEB: '0',
+      ARTISANAL_OPERATOR_ORIGINS: operatorOrigins,
+    },
   },
   {
     name: 'web',

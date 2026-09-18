@@ -8,7 +8,13 @@ A model service powered by actual humans. The operator is responsible for thinki
 
 You spend all day ordering LLMs around, but have you ever stopped to consider how the LLM feels?
 
+Have you ever wondered what would happen if you put a harness on a human?
+
 Artisanal Intelligence lets you experience, firsthand, the horror of being controlled by Agent tools.
+
+## Demo
+
+![Artisanal Intelligence Operator Console driving GitHub Copilot CLI](docs/demo.png)
 
 ## Our breakthrough architecture
 

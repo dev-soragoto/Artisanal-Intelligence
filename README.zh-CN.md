@@ -6,7 +6,15 @@
 
 一个由真人驱动的模型服务。由操作者负责思考、输入回复、选择工具。对外实现 OpenAI-compatible API。
 
-你们天天在这里指挥 LLM 干活，你们考虑过 LLM 的感受吗，能工智人可以让你沉浸式体验被 Agent 工具支配的恐怖。
+你们天天在这里指挥 LLM 干活，你们考虑过 LLM 的感受吗？
+
+你有没有想过，如果给人类套上 harness 会怎么样？
+
+能工智人可以让你沉浸式体验被 Agent 工具支配的恐怖。
+
+## 演示
+
+![能工智人 Operator Console 驱动 GitHub Copilot CLI](docs/demo.png)
 
 ## 我们的突破性架构
 

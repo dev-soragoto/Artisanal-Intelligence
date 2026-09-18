@@ -477,6 +477,10 @@ async function submitToolCall() {
   }
   submitting.value = true;
   try {
+    if (!live.value) {
+      await flushBuffered('thinking');
+      await flushBuffered('final');
+    }
     flushPendingCorrection('thinking');
     flushPendingCorrection('final');
     await liveQueue;
@@ -486,7 +490,9 @@ async function submitToolCall() {
       name: tool.function.name,
       arguments: toolArguments.value,
     });
-    selectTool(tool.function.name);
+    await sendCommand({ type: 'finish', requestId: current.id });
+    if (activeRequest.value?.id === current.id) activeRequest.value = null;
+    resetEditors();
   } catch (error) {
     operatorError.value = String(error);
   } finally {
@@ -720,8 +726,9 @@ onUnmounted(() => {
           <small v-if="schema.description" class="muted">{{ schema.description }}</small>
         </div>
         <p v-if="toolProperties.length === 0" class="muted">此工具没有参数。</p>
+        <p class="muted">提交后会结束当前响应，工具随后由客户端执行。</p>
         <button :disabled="submitting || !selectedTool" @click="submitToolCall">
-          发送 Tool Call
+          调用工具并结束响应
         </button>
       </section>
 
